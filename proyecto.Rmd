@@ -1,0 +1,171 @@
+---
+title: "R Notebook"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+```{r echo = FALSE, results='hide', message=FALSE, warning=FALSE}
+library(dplyr)
+library(ggplot2)
+library(scales)
+```
+
+```{r results='hide', message=FALSE, warning=FALSE}
+#Cargar los datasets
+chacchan<-read.table("chacchan.txt", header = FALSE, sep = " ", dec =".")
+chacchan<-chacchan %>% filter(V1 !=c(1963:1979))
+pira<-read.table("pira.txt", header = FALSE, sep = " ", dec =".")
+
+nrow(chacchan)
+table(chacchan[chacchan$V4==-99.9,]$V1)
+table(chacchan$V4==-99.9)
+recuay<-read.table("recuay.txt", header = FALSE, sep = " ", dec = ".")
+```
+
+
+```{r  results='hide', message=FALSE, warning=FALSE}
+
+#Cambiar los datos faltantes por NA
+chacchan[chacchan==-99.9]<-NA
+pira[pira==-99.9]<-NA
+recuay[recuay==-99.9]<-NA
+```
+
+```{r echo = FALSE, results='hide', message=FALSE, warning=FALSE}
+dibujar<- function (data, name){
+data %>% ggplot(aes(x=month.abb[V2], y=V4, color=V1))+geom_point(shape = 18) + labs(title=paste("Precipitaciones pluviales por meses en", name,"desde 1963 a 2014 "),   y=expression("Precipitación (mm)"), x=expression("Mes"), colour = "Año") + scale_x_discrete(limits = month.abb)
+}
+
+
+
+dibujar(chacchan, "Chacchan")
+dibujar(pira, "Pira")
+dibujar(recuay, "Recuay")
+```
+
+```{r echo = FALSE, results='hide', message=FALSE, warning=FALSE}
+#Generar y dibujar el año promedio
+drawAvgYear<- function(data, name){
+  resultado <- summarise(group_by(data, V2, V3) , media=mean(V4, na.rm = T))
+  resultado %>% ggplot(aes(x=1:366, y=media)) + geom_point()+geom_point(shape = 18, color="firebrick2") +
+    labs(title=paste("Precipitaciones pluviales anual promedio en", name,"desde 1963 a 2014 "),
+         y=expression("Precipitación (mm)"), x=expression("Día"))
+}
+
+drawAvgYear(chacchan, "Chacchan")
+drawAvgYear(pira, "Pira")
+drawAvgYear(recuay, "Recuay")
+```
+
+Casos considerados:
+
+*Nota:*
+- Día seco: 0
+- Día lluvioso: 1
+
+
+- Ayer fue seco y hoy fue seco $P_{00}$: $1$
+- Ayer fue seco y hoy fue húmedo $P_{01}$: $2$
+- Ayer fue húmedo y hoy fue seco $P_{10}$: $3$
+- Ayer fue húmedo y hoy fue húmedo $P_{11}$: $4$
+
+$$\left( \begin{array}{cccc}
+ P_{00} & P_{01} \\ 
+ P_{10} & P_{11}
+\end{array} \right)$$
+
+
+```{r}
+# Determinación de estados
+conteoCasos<-function (data){
+  data$V4[data$V4<2.5]<-0 
+  data$V4[data$V4>=2.5]<-1
+  tot<-data %>% select(-V6) %>% filter(V4 == 1 | V4 == 0) ##obviamos NAs
+  tot$V5[1]<-0 #el primer día tiene valor cero
+  for (i in 2:nrow(tot)){
+    if (tot$V4[i-1]==0 & tot$V4[i]==0){ #P00
+      tot$V5[i]<-1
+    } else if(tot$V4[i-1]==0 & tot$V4[i]==1){ #P01
+      tot$V5[i]<-2
+    } else if (tot$V4[i-1]==1 & tot$V4[i]==0){ #P10
+      tot$V5[i]<-3
+    }else if(tot$V4[i-1]==1 & tot$V4[i]==1){ #P11
+      tot$V5[i]<-4
+    }
+  }
+  return (tot)
+}
+```
+
+
+
+```{r}
+#Función de conteo y probabilidad de cada estado de la matriz de transición
+probabilidades<-function(data){
+  dta <- conteoCasos(data) %>% filter(V5 !=0) #eliminamos primer día
+    uno <-dta %>% group_by(V2) %>% filter(V5==1) %>% summarise(uno=n())
+    dos <-dta %>% group_by(V2) %>% filter(V5==2) %>% summarise(dos=n())
+    tres <-dta %>% group_by(V2) %>% filter(V5==3) %>% summarise(tres=n())
+    cuatro <-dta %>% group_by(V2) %>% filter(V5==4) %>% summarise(cuatro=n())
+    
+  resultado <- merge(merge(merge(uno, dos, "V2"), tres, "V2"), cuatro, "V2") %>%
+    
+  mutate(seco = uno + dos, lluvioso = tres + cuatro) %>% group_by(V2) %>% summarise(pUno = uno/seco, pDos = dos/seco, pTres = tres/lluvioso, pCuatro = cuatro/lluvioso) %>% select(-V2) %>% round(digits = 3)%>% as.matrix()
+  return (resultado)
+}
+
+
+```
+
+```{r}
+# Formateo a listas de las matrices de transición para cada mes
+propaMatriz <- function(data){
+  prop <- probabilidades(data)
+  start <- list(matrix(nrow = 2, ncol = 2, c(prop[1,1],prop[1,2], prop[1,3], prop[1,4]), byrow = TRUE))
+  for(i in 2:12){
+    new <-list(matrix(nrow = 2, ncol = 2, c(prop[i,1],prop[i,2], prop[i,3], prop[i,4]), byrow = TRUE))
+    start <- c(start, new)
+  }
+  return (start)
+}
+```
+
+```{r}
+#Función para estabilizar la matriz en 2^n 
+
+estabilizar <- function(data, n){
+  matrices <- propaMatriz(data)
+  for (j in 1:n){
+    for (i in 1:12){
+      matrices[[i]] <- matrices[[i]] %*% matrices[[i]]
+    }
+  }
+  return (matrices)
+}
+```
+
+```{r}
+  dta <- conteoCasos(chacchan) %>% filter(V5 !=0) #eliminamos primer día
+    uno <-dta %>% group_by(V2) %>% filter(V5==1) %>% summarise(uno=n())
+    dos <-dta %>% group_by(V2) %>% filter(V5==2) %>% summarise(dos=n())
+    tres <-dta %>% group_by(V2) %>% filter(V5==3) %>% summarise(tres=n())
+    cuatro <-dta %>% group_by(V2) %>% filter(V5==4) %>% summarise(cuatro=n())
+
+#Matriz estabilizada de Chacchan
+estabilizar(chacchan,4)
+```
+
+```{r}
+#Matriz estabilizada de Pira
+estabilizar(pira, 4)
+```
+
+```{r}
+#Matriz estabilizada de Recuay
+estabilizar(recuay, 4)
+```
+
+
+
+
+
