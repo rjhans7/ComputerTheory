@@ -1,0 +1,266 @@
+---
+title: ''
+output:
+  pdf_document: default
+  html_notebook: default
+  html_document:
+    df_print: paged
+---
+## 5 Cálculo de las matrices de transición
+
+Se realizaron los cálculos de la matriz de transición para los puesto metereológicos de Milpo, Pira y Recuay. Todos ellos dentro del departamento de Ancash. El proceso se realizó haciendo uso de R y se detalla a continuación: 
+```{r echo = FALSE, results='hide', message=FALSE, warning=FALSE}
+# Cargar los paquetes
+packages<-c("plyr", "dplyr", "tidyr",  "ggplot2")
+lapply(packages, library, character.only = TRUE)
+
+```
+
+Los dataset fueron extraídos de la página web del Senahmi.
+```{r results='hide', message=FALSE, warning=FALSE}
+#Cargar los datasets
+milpo<-read.table("milpo.txt", header = FALSE, sep = " ", dec =".")
+pira<-read.table("pira.txt", header = FALSE, sep = " ", dec =".")
+recuay<-read.table("recuay.txt", header = FALSE, sep = " ", dec = ".")
+```
+
+
+```{r  results='hide', message=FALSE, warning=FALSE}
+#Cambiar los datos faltantes por NA
+milpo[milpo==-99.9]<-NA
+pira[pira==-99.9]<-NA
+recuay[recuay==-99.9]<-NA
+```
+
+A continuación se muestran gráficos que resumen la data que se está utilizando:
+  
+```{r echo = FALSE, results='hide', message=FALSE, warning=FALSE}
+dibujar<- function (data, name){
+data %>% ggplot(aes(x=month.abb[V2], y=V4, color=V1))+geom_point(shape = 18) + labs(title=paste("Precipitaciones pluviales por meses en", name,"desde 1963 a 2014 "),   y=expression("Precipitación (mm)"), x=expression("Mes"), colour = "Año") + scale_x_discrete(limits = month.abb)
+}
+dibujar(milpo, "Milpo")
+ggsave("milpo1.png")
+dibujar(pira, "Pira")
+ggsave("pira1.png")
+dibujar(recuay, "Recuay")
+ggsave("recuay1.png")
+```
+
+También se genera un gráfico de un año promedio para cada una de las estaciones metereológicas consideradas en el estudio: 
+  
+```{r echo = FALSE, results='hide', message=FALSE, warning=FALSE}
+#Generar y dibujar el año promedio
+drawAvgYear<- function(data, name){
+  resultado <- summarise(group_by(data, V2, V3) , media=mean(V4, na.rm = T))
+  resultado %>% ggplot(aes(x=1:366, y=media)) + geom_point()+geom_point(shape = 18, color="firebrick2") +
+    labs(title=paste("Precipitaciones pluviales anual promedio en", name,"desde 1963 a 2014 "),
+         y=expression("Precipitación (mm)"), x=expression("Día"))
+}
+
+drawAvgYear(milpo, "Milpo")
+ggsave("milpo1.png")
+drawAvgYear(pira, "Pira")
+ggsave("pira1.png")
+drawAvgYear(recuay, "Recuay")
+ggsave("recuay1.png")
+```
+
+### Matrices de transición
+
+Para realizar la transición se consideraron tres estados: seco, húmedo y lluvioso.
+
+
+- Día seco: 0
+- Día húmedo: 1
+- Día lluvioso: 2
+
+**Nota: Estados considerados**
+
+- Ayer fue seco y hoy fue seco $P_{00}$: $1$
+- Ayer fue seco y hoy fue húmedo $P_{01}$: $2$
+- Ayer fue húmedo y hoy fue seco $P_{10}$: $3$
+- Ayer fue húmedo y hoy fue húmedo $P_{11}$: $4$
+
+**Matriz de transición:**
+
+$$M=\left( \begin{array}{cccc}
+ P_{ss} & P_{sh} & P_{sl}\\ 
+ P_{hs} & P_{hh} & P_{hl} \\
+ P_{ls} & P_{lh} & P_{ll}
+\end{array} \right)$$
+
+La siguiente función se hizo para determinar los estados antes mencionados:
+
+```{r}
+# Determinación de estados
+conteoCasos<-function (data){
+  data$V4[data$V4<2.5]<-0 
+  data$V4[data$V4>=2.5 & data$V4<7.5]<-1
+  data$V4[data$V4>=7.5]<-2
+  tot<-data %>% select(-V6) %>% filter(V4 == 0 | V4 == 1 | V4 == 2) ##obviamos NAs
+  tot$V5[1]<-0 #el primer día tiene valor cero
+  for (i in 2:nrow(tot)){
+    if (tot$V4[i-1]==0 & tot$V4[i]==0){ #Pss
+      tot$V5[i]<-1
+    } else if(tot$V4[i-1]==0 & tot$V4[i]==1){ #Psh
+      tot$V5[i]<-2
+    } else if (tot$V4[i-1]==0 & tot$V4[i]==2){ #Psl
+      tot$V5[i]<-3
+    }else if(tot$V4[i-1]==1 & tot$V4[i]==0){ #Phs
+      tot$V5[i]<-4
+    }else if(tot$V4[i-1]==1 & tot$V4[i]==1){ #Phh
+      tot$V5[i]<-5
+    }else if(tot$V4[i-1]==1 & tot$V4[i]==2){ #Phl
+      tot$V5[i]<-6
+    }else if(tot$V4[i-1]==2 & tot$V4[i]==0){ #Pls
+      tot$V5[i]<-7
+    }else if(tot$V4[i-1]==2 & tot$V4[i]==1){ #Plh
+      tot$V5[i]<-8
+    }else if(tot$V4[i-1]==2 & tot$V4[i]==2){ #Pll
+      tot$V5[i]<-9
+    }
+    
+  }
+  return (tot)
+}
+```
+
+```{r}
+# Función que verifica que existan valores en los meses, si no lo hay los rellena con ceros
+check <- function (data){
+  dif <- setdiff(c(1:12),c(data$V2))
+  if (length(dif)>=1){
+    for(i in dif){
+      data <- rbind(data, c(i, 0))
+    }
+  }
+  data <- data[order(data$V2),]
+  return(data)
+}
+```
+
+```{r}
+#Función de conteo y probabilidad de cada estado de la matriz de transición
+probabilidades<-function(data){
+  dta <- conteoCasos(data) %>% filter(V5 !=0) #eliminamos primer día
+    uno <-dta %>% group_by(V2) %>% filter(V5==1) %>% summarise(uno=n()) %>% check
+    dos <-dta %>% group_by(V2) %>% filter(V5==2) %>% summarise(dos=n()) %>% check
+    tres <-dta %>% group_by(V2) %>% filter(V5==3) %>% summarise(tres=n()) %>% check
+    cuatro <-dta %>% group_by(V2) %>% filter(V5==4) %>% summarise(cuatro=n()) %>% check
+    cinco <-dta %>% group_by(V2) %>% filter(V5==5) %>% summarise(cinco=n()) %>% check
+    seis <-dta %>% group_by(V2) %>% filter(V5==6) %>% summarise(seis=n()) %>% check
+    siete <-dta %>% group_by(V2) %>% filter(V5==7) %>% summarise(siete=n()) %>% check
+    ocho <-dta %>% group_by(V2) %>% filter(V5==8) %>% summarise(ocho=n()) %>% check
+    nueve <-dta %>% group_by(V2) %>% filter(V5==9) %>% summarise(nueve=n()) %>% check
+    
+    a<-dta %>% group_by(V2) %>% filter(V5==6)
+    table(a$V2)
+    
+  resultado <- merge(merge(merge(merge(merge(merge(merge(merge(uno, dos, "V2"), tres, "V2"), cuatro, "V2"), cinco, "V2"), seis, "V2"), siete, "V2"), ocho, "V2"), nueve, "V2") %>%
+  mutate(seco = uno + dos + tres , humedo = cuatro + cinco + seis, lluvioso = siete + ocho + nueve) %>% 
+    group_by(V2) %>% summarise(pUno = uno/seco, pDos = dos/seco, pTres = tres/seco,
+    pCuatro = cuatro/humedo, pCinco = cinco/humedo, pSeis = seis/humedo, pSiete = siete/lluvioso, pOcho = ocho/lluvioso, pNueve = nueve/lluvioso) %>% select(-V2) %>% round(digits = 3) %>% as.matrix()
+  return (resultado)
+}
+```
+
+```{r}
+# Formateo a listas de las matrices de transición para cada mes
+propaMatriz <- function(data){
+  prop <- probabilidades(data)
+  start <- list(matrix(nrow = 3, ncol = 3, c(prop[1,1], prop[1,2],
+                                             prop[1,3], prop[1,4], 
+                                             prop[1,5], prop[1,6],
+                                             prop[1,7], prop[1,8],
+                                             prop[1,9]), byrow = TRUE))
+  for(i in 2:12){
+    new <-list(matrix(nrow = 3, ncol = 3, c(prop[i,1], prop[i,2],
+                                            prop[i,3], prop[i,4], 
+                                            prop[i,5], prop[i,6],
+                                            prop[i,7], prop[i,8],
+                                            prop[i,9]), byrow = TRUE))
+    start <- c(start, new)
+  }
+  return (start)
+}
+propaMatriz(milpo)
+```
+
+```{r}
+#Función para estabilizar la matriz en 2^n 
+estabilizar <- function(data, n){
+  estado <- TRUE
+  contador <- 0
+  matrices <- propaMatriz(data)
+  while(estado){
+    contador <- contador + 1
+    for (i in 1:12){
+      matrices[[i]] <- matrices[[i]] %*% matrices[[i]]
+      if(round(matrices[[1]][1,1],n) == round(matrices[[1]][2,1],n)){
+        estado <- FALSE
+      }
+    }
+  }
+  print(paste("Iteraciones: ", contador))
+ return (matrices)
+}
+estabilizar(milpo, 5)
+```
+
+```{r}
+#Limiting probabilities
+limiting <- function(data, n){
+  matrices <- estabilizar(data, n)
+  matrices[[1]] <- matrix(nrow = 1, ncol=3, c(1,0,0), byrow = TRUE) %*% matrices[[1]]
+  first<-cbind(as.data.frame(month.abb[1]), as.data.frame(round(matrices[[1]],3)))
+  names(first)<- c("Mes", "Seco", "Húmedo", "Lluvioso")
+      for (i in 2:12){
+      matrices[[i]] <- matrix(nrow = 1, ncol=3, c(1,0,0), byrow = TRUE) %*% matrices[[i]]
+      second <-cbind(as.data.frame(month.abb[i]), as.data.frame(round(matrices[[i]],3)))
+      names(second)<- c("Mes", "Seco", "Húmedo", "Lluvioso")
+      first<-rbind(first, second)
+      }
+  
+  return(first)
+}
+
+```
+
+A continuación se muestran las matrices estabilizadas:
+
+```{r}
+#Matriz estabilizada de Milpo
+estabilizar(milpo, 5)
+```
+
+```{r}
+#Matriz estabilizada de Pira
+estabilizar(recuay, 5)
+```
+
+```{r}
+#Matriz estabilizada de Recuay
+estabilizar(recuay, 5)
+```
+Finalmente, los vectores estabilizados y limitados para cada estación metereológica se detalla a continuación:
+
+```{r  message=FALSE, warning=FALSE}
+#Vector estabilizada de Milpo
+a<-limiting(milpo, 5)
+as.matrix(a)
+```
+
+```{r  message=FALSE, warning=FALSE}
+#Vector estabilizada de Pira
+a<-limiting(pira, 1)
+as.matrix(a)
+```
+
+```{r  message=FALSE, warning=FALSE}
+#Vector estabilizada de Recuay
+a<-limiting(recuay, 5)
+as.matrix(a)
+```
+
+
+
